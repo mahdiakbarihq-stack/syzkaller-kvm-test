@@ -9,10 +9,10 @@ permissions:
 jobs:
   kvm-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
 
     steps:
-      - name: Check CPU, RAM and KVM
+      - name: Check CPU, RAM, KVM and QEMU
         run: |
           echo "========== CPU =========="
           nproc
@@ -55,23 +55,56 @@ jobs:
             echo "SUDO_NOT_AVAILABLE"
           fi
 
-          echo "========== KVM API TEST: NORMAL USER =========="
+          echo "========== KVM API: NORMAL USER =========="
           if [ -c /dev/kvm ]; then
-
             if python3 -c 'import os, fcntl; fd = os.open("/dev/kvm", os.O_RDWR); print("KVM_API_VERSION =", fcntl.ioctl(fd, 0xAE00, 0)); os.close(fd)'; then
               echo "KVM_USER_ACCESS_OK"
             else
               echo "KVM_USER_ACCESS_FAILED"
             fi
 
-            echo "========== KVM API TEST: SUDO =========="
-
+            echo "========== KVM API: SUDO =========="
             if sudo -n python3 -c 'import os, fcntl; fd = os.open("/dev/kvm", os.O_RDWR); print("KVM_API_VERSION =", fcntl.ioctl(fd, 0xAE00, 0)); os.close(fd)'; then
               echo "KVM_SUDO_ACCESS_OK"
             else
               echo "KVM_SUDO_ACCESS_FAILED"
             fi
-
           else
             echo "KVM_DEVICE_MISSING"
           fi
+
+          echo "========== INSTALL QEMU =========="
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-system-x86
+
+          echo "========== QEMU VERSION =========="
+          qemu-system-x86_64 --version
+
+          echo "========== QEMU KVM TEST =========="
+          if sudo timeout --signal=TERM 5s qemu-system-x86_64 \
+            -machine pc,accel=kvm \
+            -cpu host \
+            -m 128M \
+            -nodefaults \
+            -display none \
+            -S \
+            -monitor none \
+            -serial none \
+            -parallel none; then
+
+            echo "QEMU_STOPPED_BEFORE_TIMEOUT"
+            exit 1
+
+          else
+            QEMU_EXIT_CODE=$?
+
+            if [ "$QEMU_EXIT_CODE" -eq 124 ]; then
+              echo "QEMU_KVM_START_OK"
+            else
+              echo "QEMU_KVM_START_FAILED"
+              echo "EXIT_CODE=$QEMU_EXIT_CODE"
+              exit 1
+            fi
+          fi
+
+          echo "========== ALL TESTS FINISHED =========="
