@@ -14,24 +14,64 @@ jobs:
     steps:
       - name: Check CPU, RAM and KVM
         run: |
-          echo "=== CPU ==="
+          echo "========== CPU =========="
           nproc
 
-          echo "=== RAM ==="
+          echo "========== RAM =========="
           free -h
 
-          echo "=== ARCHITECTURE ==="
+          echo "========== ARCHITECTURE =========="
           uname -m
 
-          echo "=== VIRTUALIZATION FLAGS ==="
-          grep -m1 -oE 'vmx|svm' /proc/cpuinfo | sort -u || echo "No virtualization flag"
+          echo "========== CURRENT USER =========="
+          whoami
+          id
 
-          echo "=== KVM DEVICE ==="
+          echo "========== VIRTUALIZATION FLAGS =========="
+          VIRT_FLAGS=$(awk '
+            /^flags[[:space:]]*:/ {
+              for (i = 1; i <= NF; i++) {
+                if ($i == "vmx" || $i == "svm") {
+                  print $i
+                }
+              }
+              exit
+            }
+          ' /proc/cpuinfo | sort -u)
+
+          if [ -n "$VIRT_FLAGS" ]; then
+            echo "$VIRT_FLAGS"
+          else
+            echo "NO_VIRTUALIZATION_FLAG"
+          fi
+
+          echo "========== KVM DEVICE =========="
           ls -l /dev/kvm 2>&1 || true
 
-          echo "=== KVM API TEST ==="
+          echo "========== SUDO CHECK =========="
+          if sudo -n true 2>/dev/null; then
+            echo "SUDO_AVAILABLE"
+          else
+            echo "SUDO_NOT_AVAILABLE"
+          fi
+
+          echo "========== KVM API TEST: NORMAL USER =========="
           if [ -c /dev/kvm ]; then
-            python3 -c 'import os, fcntl; fd = os.open("/dev/kvm", os.O_RDWR); print("KVM_API_VERSION =", fcntl.ioctl(fd, 0xAE00, 0)); os.close(fd)' || echo "KVM_API_TEST_FAILED"
+
+            if python3 -c 'import os, fcntl; fd = os.open("/dev/kvm", os.O_RDWR); print("KVM_API_VERSION =", fcntl.ioctl(fd, 0xAE00, 0)); os.close(fd)'; then
+              echo "KVM_USER_ACCESS_OK"
+            else
+              echo "KVM_USER_ACCESS_FAILED"
+            fi
+
+            echo "========== KVM API TEST: SUDO =========="
+
+            if sudo -n python3 -c 'import os, fcntl; fd = os.open("/dev/kvm", os.O_RDWR); print("KVM_API_VERSION =", fcntl.ioctl(fd, 0xAE00, 0)); os.close(fd)'; then
+              echo "KVM_SUDO_ACCESS_OK"
+            else
+              echo "KVM_SUDO_ACCESS_FAILED"
+            fi
+
           else
             echo "KVM_DEVICE_MISSING"
           fi
