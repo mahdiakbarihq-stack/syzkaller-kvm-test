@@ -1,0 +1,98 @@
+name: Build Syzkaller Kernel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libelf-dev \
+            libssl-dev \
+            libncurses-dev \
+            dwarves \
+            xz-utils \
+            curl
+
+      - name: Download Linux Kernel
+        run: |
+          set -e
+
+          KERNEL_VERSION="6.18.63"
+
+          curl -fL --retry 3 \
+            "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz" \
+            -o linux.tar.xz
+
+          tar -xf linux.tar.xz
+          cd "linux-${KERNEL_VERSION}"
+
+          echo "KERNEL_SOURCE_READY"
+
+      - name: Configure Kernel for Syzkaller
+        run: |
+          set -e
+
+          cd linux-6.18.63
+
+          make defconfig
+          make kvm_guest.config
+
+          scripts/config --enable KCOV
+          scripts/config --enable KCOV_INSTRUMENT_ALL
+          scripts/config --enable KCOV_ENABLE_COMPARISONS
+          scripts/config --enable DEBUG_FS
+
+          scripts/config --enable KASAN
+          scripts/config --enable KASAN_GENERIC
+          scripts/config --enable KASAN_INLINE
+
+          scripts/config --enable DEBUG_INFO
+          scripts/config --enable KALLSYMS
+          scripts/config --enable KALLSYMS_ALL
+
+          make olddefconfig
+
+          echo "========== IMPORTANT CONFIGS =========="
+
+          for option in KCOV KCOV_INSTRUMENT_ALL KCOV_ENABLE_COMPARISONS KASAN DEBUG_FS; do
+            grep "^CONFIG_${option}=" .config || true
+          done
+
+      - name: Build Linux Kernel
+        run: |
+          set -e
+
+          cd linux-6.18.63
+
+          echo "========== BUILD START =========="
+
+          make -j2 bzImage vmlinux
+
+          echo "========== BUILD COMPLETE =========="
+
+          ls -lh arch/x86/boot/bzImage
+          ls -lh vmlinux
+
+      - name: Save Kernel Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: syzkaller-linux-kernel
+          path: |
+            linux-6.18.63/arch/x86/boot/bzImage
+            linux-6.18.63/vmlinux
+            linux-6.18.63/.config
+          retention-days: 7
