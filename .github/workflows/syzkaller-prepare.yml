@@ -38,7 +38,6 @@ jobs:
             -o linux.tar.xz
 
           tar -xf linux.tar.xz
-          cd "linux-${KERNEL_VERSION}"
 
           echo "KERNEL_SOURCE_READY"
 
@@ -51,26 +50,65 @@ jobs:
           make defconfig
           make kvm_guest.config
 
+          # KCOV coverage
           scripts/config --enable KCOV
           scripts/config --enable KCOV_INSTRUMENT_ALL
           scripts/config --enable KCOV_ENABLE_COMPARISONS
           scripts/config --enable DEBUG_FS
 
+          # Debian image requirements
+          scripts/config --enable CONFIGFS_FS
+          scripts/config --enable SECURITYFS
+
+          # KASAN memory error detection
           scripts/config --enable KASAN
           scripts/config --enable KASAN_GENERIC
           scripts/config --enable KASAN_INLINE
 
-          scripts/config --enable DEBUG_INFO
+          # Debug information
+          scripts/config --enable DEBUG_KERNEL
+          scripts/config --enable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
           scripts/config --enable KALLSYMS
           scripts/config --enable KALLSYMS_ALL
 
+          # Sandbox namespaces
+          scripts/config --enable CGROUPS
+          scripts/config --enable NAMESPACES
+          scripts/config --enable UTS_NS
+          scripts/config --enable IPC_NS
+          scripts/config --enable PID_NS
+          scripts/config --enable NET_NS
+          scripts/config --enable CGROUP_PIDS
+          scripts/config --enable MEMCG
+          scripts/config --enable USER_NS
+
+          # KCOV compatibility
+          scripts/config --disable RANDOMIZE_BASE
+
           make olddefconfig
 
-          echo "========== IMPORTANT CONFIGS =========="
+          echo "========== REQUIRED CONFIGS =========="
 
-          for option in KCOV KCOV_INSTRUMENT_ALL KCOV_ENABLE_COMPARISONS KASAN DEBUG_FS; do
-            grep "^CONFIG_${option}=" .config || true
+          for option in KCOV KCOV_INSTRUMENT_ALL KCOV_ENABLE_COMPARISONS DEBUG_FS CONFIGFS_FS SECURITYFS KASAN KASAN_GENERIC KASAN_INLINE DEBUG_KERNEL DEBUG_INFO DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT KALLSYMS KALLSYMS_ALL; do
+            if grep -qx "CONFIG_${option}=y" .config; then
+              echo "OK: CONFIG_${option}=y"
+            else
+              echo "::error::CONFIG_${option} is not enabled"
+              exit 1
+            fi
           done
+
+          echo "========== SANDBOX CONFIGS =========="
+
+          for option in CGROUPS NAMESPACES UTS_NS IPC_NS PID_NS NET_NS CGROUP_PIDS MEMCG USER_NS; do
+            grep -E "^CONFIG_${option}=|^# CONFIG_${option} is not set" .config || true
+          done
+
+          echo "========== RANDOMIZE BASE =========="
+
+          grep -E "^CONFIG_RANDOMIZE_BASE=|^# CONFIG_RANDOMIZE_BASE is not set" .config || true
+
+          echo "KERNEL_CONFIG_CHECK_COMPLETE"
 
       - name: Build Linux Kernel
         run: |
@@ -96,4 +134,4 @@ jobs:
             linux-6.18.63/arch/x86/boot/bzImage
             linux-6.18.63/vmlinux
             linux-6.18.63/.config
-          retention-days: 7
+          retention-days: 30
