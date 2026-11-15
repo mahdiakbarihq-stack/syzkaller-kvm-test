@@ -1,4 +1,4 @@
-name: Check KVM availability
+name: KVM and Alpine Guest Test
 
 on:
   workflow_dispatch:
@@ -9,10 +9,10 @@ permissions:
 jobs:
   kvm-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
-      - name: Check CPU, RAM, KVM and QEMU
+      - name: Check CPU, RAM and KVM
         run: |
           echo "========== CPU =========="
           nproc
@@ -23,88 +23,70 @@ jobs:
           echo "========== ARCHITECTURE =========="
           uname -m
 
-          echo "========== CURRENT USER =========="
-          whoami
-          id
-
           echo "========== VIRTUALIZATION FLAGS =========="
-          VIRT_FLAGS=$(awk '
-            /^flags[[:space:]]*:/ {
-              for (i = 1; i <= NF; i++) {
-                if ($i == "vmx" || $i == "svm") {
-                  print $i
-                }
-              }
-              exit
-            }
-          ' /proc/cpuinfo | sort -u)
-
-          if [ -n "$VIRT_FLAGS" ]; then
-            echo "$VIRT_FLAGS"
-          else
-            echo "NO_VIRTUALIZATION_FLAG"
-          fi
+          grep -m1 -oE '\b(vmx|svm)\b' /proc/cpuinfo || true
 
           echo "========== KVM DEVICE =========="
-          ls -l /dev/kvm 2>&1 || true
+          ls -l /dev/kvm
 
-          echo "========== SUDO CHECK =========="
-          if sudo -n true 2>/dev/null; then
-            echo "SUDO_AVAILABLE"
-          else
-            echo "SUDO_NOT_AVAILABLE"
-          fi
+          echo "========== KVM API =========="
+          sudo python3 -c 'import os, fcntl; fd=os.open("/dev/kvm", os.O_RDWR); print("KVM_API_VERSION =", fcntl.ioctl(fd, 0xAE00, 0)); os.close(fd)'
 
-          echo "========== KVM API: NORMAL USER =========="
-          if [ -c /dev/kvm ]; then
-            if python3 -c 'import os, fcntl; fd = os.open("/dev/kvm", os.O_RDWR); print("KVM_API_VERSION =", fcntl.ioctl(fd, 0xAE00, 0)); os.close(fd)'; then
-              echo "KVM_USER_ACCESS_OK"
-            else
-              echo "KVM_USER_ACCESS_FAILED"
-            fi
-
-            echo "========== KVM API: SUDO =========="
-            if sudo -n python3 -c 'import os, fcntl; fd = os.open("/dev/kvm", os.O_RDWR); print("KVM_API_VERSION =", fcntl.ioctl(fd, 0xAE00, 0)); os.close(fd)'; then
-              echo "KVM_SUDO_ACCESS_OK"
-            else
-              echo "KVM_SUDO_ACCESS_FAILED"
-            fi
-          else
-            echo "KVM_DEVICE_MISSING"
-          fi
-
-          echo "========== INSTALL QEMU =========="
+      - name: Install QEMU and curl
+        run: |
           sudo apt-get update -qq
-          sudo apt-get install -y qemu-system-x86
+          sudo apt-get install -y qemu-system-x86 curl
 
           echo "========== QEMU VERSION =========="
           qemu-system-x86_64 --version
 
-          echo "========== QEMU KVM TEST =========="
-          if sudo timeout --signal=TERM 5s qemu-system-x86_64 \
+      - name: Download Alpine Linux
+        run: |
+          set -e
+
+          BASE_URL="https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/netboot-3.24.4"
+
+          curl -fL --retry 3 "$BASE_URL/vmlinuz-virt" -o vmlinuz-virt
+          curl -fL --retry 3 "$BASE_URL/initramfs-virt" -o initramfs-virt
+          curl -fL --retry 3 "$BASE_URL/modloop-virt" -o modloop-virt
+
+          echo "========== DOWNLOADED FILES =========="
+          ls -lh vmlinuz-virt initramfs-virt modloop-virt
+
+      - name: Boot Alpine Linux with KVM
+        run: |
+          set +e
+
+          sudo timeout --signal=TERM --kill-after=5s 120s \
+            qemu-system-x86_64 \
             -machine pc,accel=kvm \
             -cpu host \
-            -m 128M \
-            -nodefaults \
+            -m 512M \
+            -kernel vmlinuz-virt \
+            -initrd initramfs-virt \
+            -append "modules=loop,squashfs quiet nomodeset console=ttyS0 alpine_repo=http://dl-cdn.alpinelinux.org/alpine/v3.24/main modloop=http://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/netboot-3.24.4/modloop-virt" \
+            -nic user,model=virtio-net-pci \
             -display none \
-            -S \
+            -serial stdio \
             -monitor none \
-            -serial none \
-            -parallel none; then
+            -no-reboot \
+            > qemu-boot.log 2>&1
 
-            echo "QEMU_STOPPED_BEFORE_TIMEOUT"
-            exit 1
+          QEMU_EXIT_CODE=$?
 
+          set -e
+
+          echo "========== ALPINE BOOT LOG =========="
+          cat qemu-boot.log
+
+          echo "========== CHECK BOOT RESULT =========="
+
+          if grep -Eiq 'Welcome to Alpine Linux|localhost login:|login:' qemu-boot.log; then
+            echo "ALPINE_GUEST_BOOT_OK"
           else
-            QEMU_EXIT_CODE=$?
-
-            if [ "$QEMU_EXIT_CODE" -eq 124 ]; then
-              echo "QEMU_KVM_START_OK"
-            else
-              echo "QEMU_KVM_START_FAILED"
-              echo "EXIT_CODE=$QEMU_EXIT_CODE"
-              exit 1
-            fi
+            echo "ALPINE_GUEST_BOOT_FAILED"
+            echo "QEMU_EXIT_CODE=$QEMU_EXIT_CODE"
+            exit 1
           fi
 
           echo "========== ALL TESTS FINISHED =========="
