@@ -91,6 +91,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: syzkaller-linux-kernel
+          include-hidden-files: true
           path: |
             linux-6.18.63/arch/x86/boot/bzImage
             linux-6.18.63/vmlinux
